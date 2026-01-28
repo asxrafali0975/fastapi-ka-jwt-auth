@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response , Depends
 import uvicorn
+import jwt
 
 
 from pydantic import BaseModel
 from database import collection
-from configs import hash_pass_func, generate_token, get_payload, verify_hash_pw
+from configs import hash_pass_func, generate_token, get_payload, verify_hash_pw , get_token , generate_refresh_token
 
 
 app = FastAPI()
@@ -20,6 +21,11 @@ class User(BaseModel):
 class Login(BaseModel):
     email: str
     password: str
+    
+    
+    
+
+    
 
 
 @app.get("/")
@@ -43,18 +49,6 @@ async def register_route(user: User, res: Response):
                     "password": hashed_password,
                     "age": value["age"],
                 }
-            )
-
-            user_id = str(insert_user.inserted_id)
-
-            Token = generate_token(value["email"], user_id)
-
-            res.set_cookie(
-                key="access_token",
-                value=Token,
-                httponly=True,
-                secure=False,
-                samesite="lax",
             )
 
             return "inserted"
@@ -90,17 +84,63 @@ async def login_route(data: Login, res: Response):
         elif user:
             user["_id"] = str(user["_id"])
             password_verify = verify_hash_pw(password, user["password"])
-            Token = generate_token(email, user["_id"])
-            res.set_cookie(
+            
+            if password_verify:
+                Token = generate_token(email, user["_id"])
+                res.set_cookie(
                 key="access_token",
                 value=Token,
                 httponly=True,
                 secure=False,
                 samesite="lax",
-            )
-            if password_verify:
+                    )
+                
+                refresh_token = generate_refresh_token(email, user["_id"])
+                res.set_cookie(
+                key="refresh_token",
+                value=refresh_token,
+                httponly=True,
+                secure=False,
+                samesite="lax",
+                    )
+                
                 return "dashboard"
             else:
                 return "wrong email or password "
     except Exception as e:
         return {"error": str(e)}
+    
+    
+@app.post("/refresh")
+def refresh(req: Request, res: Response):
+    try:
+        # Client se refresh token lo
+        refresh_token = req.cookies.get("refresh_token")
+        if not refresh_token:
+            return {"error": "refresh token not found, login again"}
+
+        # Validate karo refresh token
+        payload = jwt.decode(refresh_token, secret_key, algorithms=[ALGO])
+
+        # Agar valid hai → naya access token generate karo
+        new_access_token = generate_token(payload["email"], payload["_id"])
+        res.set_cookie(key="access_token", value=new_access_token, httponly=True)
+
+        return {"message": "new access token issued"}
+
+    except jwt.ExpiredSignatureError:
+        return {"error": "refresh token expired, login again"}
+    except jwt.InvalidTokenError:
+        return {"error": "invalid refresh token"}
+
+
+
+@app.get("/dashboard")
+def dash(payload = Depends(get_token)):
+    try:
+        if payload:
+            return payload
+        
+    except Exception as e:
+        return {"error": str(e)}
+    
